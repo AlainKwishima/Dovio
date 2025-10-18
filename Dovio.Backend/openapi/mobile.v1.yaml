@@ -1,0 +1,847 @@
+openapi: 3.1.0
+info:
+  title: Mobile API
+  version: 1.0.0
+servers:
+  - url: http://localhost:5000/api
+# The rest of the spec mirrors the previous, without the old name
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    UserPublic:
+      type: object
+      properties:
+        userId: { type: string }
+        fullNames: { type: string }
+        profilePictureURL: { type: ["string", "null"], format: uri }
+    Post:
+      type: object
+      properties:
+        postId: { type: string }
+        userId: { type: string }
+        content:
+          type: object
+          properties:
+            postText: { type: string }
+            mediaURLs: { type: array, items: { type: string, format: uri } }
+        timestamp: { type: string, format: date-time }
+        author: { $ref: '#/components/schemas/UserPublic' }
+    Story:
+      type: object
+      properties:
+        storyId: { type: string }
+        userId: { type: string }
+        content:
+          type: object
+          properties:
+            storyText: { type: string }
+            mediaURL: { type: string, format: uri }
+            mediaType: { type: string, enum: [image, video, text] }
+        expiresAt: { type: string, format: date-time }
+        viewCount: { type: integer }
+        timestamp: { type: string, format: date-time }
+        author: { $ref: '#/components/schemas/UserPublic' }
+    Comment:
+      type: object
+      properties:
+        commentId: { type: string }
+        postId: { type: string }
+        userId: { type: string }
+        content: { type: string }
+        parentCommentId: { type: string, nullable: true }
+        likeCount: { type: integer }
+        timestamp: { type: string, format: date-time }
+        author: { $ref: '#/components/schemas/UserPublic' }
+        replies: { type: array, items: { $ref: '#/components/schemas/Comment' } }
+    PostShare:
+      type: object
+      properties:
+        shareId: { type: string }
+        originalPostId: { type: string }
+        sharedByUserId: { type: string }
+        shareText: { type: string }
+        timestamp: { type: string, format: date-time }
+        sharer: { $ref: '#/components/schemas/UserPublic' }
+        originalPost: { $ref: '#/components/schemas/Post' }
+    Notification:
+      type: object
+      properties:
+        notificationId: { type: string }
+        userId: { type: string }
+        type: { type: string, enum: [follow, like, comment, share, message, story_view] }
+        fromUserId: { type: string }
+        relatedEntityId: { type: string, nullable: true }
+        title: { type: string }
+        message: { type: string }
+        read: { type: boolean }
+        timestamp: { type: string, format: date-time }
+        fromUser: { $ref: '#/components/schemas/UserPublic' }
+    Reaction:
+      type: object
+      properties:
+        reactionId: { type: string }
+        entityType: { type: string, enum: [post, story, comment] }
+        entityId: { type: string }
+        userId: { type: string }
+        reactionType: { type: string, enum: [like, dislike, love, laugh, angry, sad, wow] }
+        timestamp: { type: string, format: date-time }
+        user: { $ref: '#/components/schemas/UserPublic' }
+    Message:
+      type: object
+      properties:
+        messageId: { type: string }
+        sender: { $ref: '#/components/schemas/UserPublic' }
+        receiver: { $ref: '#/components/schemas/UserPublic' }
+        content: { type: string }
+        mediaUrl: { type: ["string", "null"], format: uri }
+        timestamp: { type: string, format: date-time }
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200': { description: OK }
+  /auth/register:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fullNames, email, password, dob, address, phoneNumber, occupation, hobbies]
+              properties:
+                fullNames: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                dob: { type: string, format: date }
+                address: { type: string }
+                phoneNumber: { type: string }
+                occupation: { type: string }
+                hobbies: { type: string }
+                profilePictureURL: { type: string, format: uri }
+      responses:
+        '201': { description: Created }
+  /auth/login:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200': { description: OK }
+  /auth/refresh-token:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200': { description: OK }
+  /auth/verify-email:
+    get:
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: OK }
+  /auth/forgot-password:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { description: OK }
+  /auth/reset-password:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, newPassword]
+              properties:
+                token: { type: string }
+                newPassword: { type: string, minLength: 8 }
+      responses:
+        '200': { description: OK }
+  /auth/2fa/request:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { description: OK }
+  /auth/2fa/verify:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string }
+      responses:
+        '200': { description: OK }
+  /auth/verify-password:
+    post:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword]
+              properties:
+                currentPassword: { type: string }
+      responses:
+        '200': { description: OK }
+  /users/profile:
+    get:
+      security: [ { bearerAuth: [] } ]
+      responses: { '200': { description: OK } }
+    put:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fullNames: { type: string }
+                address: { type: string }
+                phoneNumber: { type: string }
+                occupation: { type: string }
+                hobbies: { type: string }
+                profilePictureURL: { type: string, format: uri }
+      responses: { '200': { description: OK } }
+  /users/account:
+    delete:
+      security: [ { bearerAuth: [] } ]
+      responses: { '200': { description: OK } }
+  /users/wallet:
+    put:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, operation]
+              properties:
+                amount: { type: number }
+                operation: { type: string, enum: [add, subtract] }
+      responses: { '200': { description: OK } }
+  /users/wallet/balance:
+    get:
+      security: [ { bearerAuth: [] } ]
+      responses: { '200': { description: OK } }
+  /users/wallet/send:
+    post:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recipientId, amount]
+              properties:
+                recipientId: { type: string }
+                amount: { type: number, minimum: 0.01 }
+                message: { type: string, maxLength: 200 }
+      responses: { '200': { description: OK } }
+  /users/wallet/withdraw:
+    post:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, withdrawalMethod]
+              properties:
+                amount: { type: number, minimum: 0.01 }
+                withdrawalMethod: { type: string, enum: [bank_transfer, paypal, stripe, crypto] }
+                accountDetails: { type: string, maxLength: 500 }
+      responses: { '200': { description: OK } }
+  /users/activity:
+    post:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string }
+      responses: { '200': { description: OK } }
+  /users/active-time:
+    post:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [date, beginningTime, endTime]
+              properties:
+                date: { type: string, pattern: '^\\d{4}-\\d{2}-\\d{2}$' }
+                beginningTime: { type: string, pattern: '^\\d{2}:\\d{2}$' }
+                endTime: { type: string, pattern: '^\\d{2}:\\d{2}$' }
+      responses: { '200': { description: OK } }
+  /users/activity-history:
+    get:
+      security: [ { bearerAuth: [] } ]
+      responses: { '200': { description: OK } }
+  /posts:
+    get:
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100 }
+        - in: query
+          name: userId
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+    post:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [postText]
+              properties:
+                postText: { type: string }
+                mediaURLs: { type: array, items: { type: string, format: uri } }
+      responses: { '201': { description: Created } }
+  /posts/{postId}:
+    get:
+      parameters:
+        - in: path
+          name: postId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+    put:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: postId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                postText: { type: string }
+                mediaURLs: { type: array, items: { type: string, format: uri } }
+      responses: { '200': { description: OK } }
+    delete:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: postId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+  /messages:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100 }
+        - in: query
+          name: otherUserId
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+    post:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [receiverId, content]
+              properties:
+                receiverId: { type: string }
+                content: { type: string }
+                mediaUrl: { type: string, format: uri }
+      responses: { '201': { description: Created } }
+  /messages/{messageId}:
+    delete:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: messageId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+  /messages/conversations:
+    get:
+      security: [ { bearerAuth: [] } ]
+      responses: { '200': { description: OK } }
+  /follows:
+    post:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [followeeId]
+              properties:
+                followeeId: { type: string }
+      responses: { '201': { description: Created } }
+  /follows/{followeeId}:
+    delete:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: followeeId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+  /follows/followers/{userId}:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100 }
+      responses: { '200': { description: OK } }
+  /follows/following/{userId}:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100 }
+      responses: { '200': { description: OK } }
+  /follows/status/{userId}:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+  /stories:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+        - in: query
+          name: userId
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+    post:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                storyText: { type: string, maxLength: 1000 }
+                mediaURL: { type: string, format: uri, maxLength: 5000 }
+                mediaType: { type: string, enum: [image, video, text], default: text }
+      responses: { '201': { description: Created } }
+  /stories/{storyId}:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: storyId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+    delete:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: storyId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+  /comments:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: postId
+          required: true
+          schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+      responses: { '200': { description: OK } }
+    post:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [postId, content]
+              properties:
+                postId: { type: string }
+                content: { type: string, maxLength: 500 }
+                parentCommentId: { type: string }
+      responses: { '201': { description: Created } }
+  /comments/{commentId}:
+    put:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: commentId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string, maxLength: 500 }
+      responses: { '200': { description: OK } }
+    delete:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: commentId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+  /comments/{commentId}/like:
+    post:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: commentId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+  /shares:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+        - in: query
+          name: userId
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+    post:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [originalPostId]
+              properties:
+                originalPostId: { type: string }
+                shareText: { type: string, maxLength: 500 }
+      responses: { '201': { description: Created } }
+  /shares/post/{postId}:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: postId
+          required: true
+          schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+      responses: { '200': { description: OK } }
+  /shares/{shareId}:
+    delete:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: shareId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+  /notifications:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+        - in: query
+          name: unreadOnly
+          schema: { type: string, enum: [true, false] }
+      responses: { '200': { description: OK } }
+  /notifications/{notificationId}/read:
+    put:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: notificationId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+  /notifications/read-all:
+    put:
+      security: [ { bearerAuth: [] } ]
+      responses: { '200': { description: OK } }
+  /notifications/{notificationId}:
+    delete:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: notificationId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+  /feed:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+        - in: query
+          name: type
+          schema: { type: string, enum: [all, posts, stories] }
+      responses: { '200': { description: OK } }
+  /feed/discover:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+      responses: { '200': { description: OK } }
+  /feed/trending:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+        - in: query
+          name: timeframe
+          schema: { type: string, enum: [1h, 24h, 7d, 30d] }
+      responses: { '200': { description: OK } }
+  /search/users:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string, minLength: 2 }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+      responses: { '200': { description: OK } }
+  /search/posts:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string, minLength: 2 }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+      responses: { '200': { description: OK } }
+  /search/stories:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string, minLength: 2 }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+      responses: { '200': { description: OK } }
+  /search/global:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string, minLength: 2 }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+      responses: { '200': { description: OK } }
+  /search/suggested-users:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+      responses: { '200': { description: OK } }
+  /reactions:
+    post:
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entityType: { type: string, enum: [post, story, comment] }
+                entityId: { type: string }
+                reactionType: { type: string, enum: [like, dislike, love, laugh, angry, sad, wow] }
+              required: [entityType, entityId, reactionType]
+      responses: { '200': { description: OK } }
+  /reactions/{entityType}/{entityId}:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: entityType
+          required: true
+          schema: { type: string, enum: [post, story, comment] }
+        - in: path
+          name: entityId
+          required: true
+          schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 50 }
+      responses: { '200': { description: OK } }
+  /reactions/{entityType}/{entityId}/user:
+    get:
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - in: path
+          name: entityType
+          required: true
+          schema: { type: string, enum: [post, story, comment] }
+        - in: path
+          name: entityId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+
+

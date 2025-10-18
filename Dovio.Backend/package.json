@@ -1,0 +1,56 @@
+{
+  "name": "mobile-backend",
+  "version": "1.0.0",
+  "description": "Backend API for the Mobile application",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "seed": "node src/utils/seed.js",
+    "test": "cross-env NODE_ENV=test node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand",
+    "test:watch": "cross-env NODE_ENV=test node --experimental-vm-modules ./node_modules/jest/bin/jest.js --watch",
+    "test:all": "node test-runner.js",
+    "test:features": "cross-env NODE_ENV=test node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/features-simple.e2e.test.js --runInBand",
+    "test:reactions": "cross-env NODE_ENV=test node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/reactions.e2e.test.js --runInBand",
+    "test:new": "cross-env NODE_ENV=test node --experimental-vm-modules ./node_modules/jest/bin/jest.js tests/new-features.e2e.test.js --runInBand"
+  },
+  "keywords": [
+    "express",
+    "mongodb",
+    "jwt",
+    "api",
+    "mobile-backend"
+  ],
+  "author": "Mobile Team",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.12.2",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-mongo-sanitize": "^2.2.0",
+    "express-rate-limit": "^7.1.5",
+    "helmet": "^7.1.0",
+    "hpp": "^0.2.3",
+    "joi": "^17.11.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.0.3",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^7.0.6",
+    "swagger-ui-express": "^5.0.1",
+    "uuid": "^9.0.1",
+    "yamljs": "^0.3.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "cross-env": "^10.0.0",
+    "jest": "^30.2.0",
+    "mongodb-memory-server": "^10.1.4",
+    "nodemon": "^3.0.2",
+    "supertest": "^7.1.4",
+    "tslib": "^2.7.0"
+  }
+}
