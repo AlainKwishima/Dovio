@@ -8,7 +8,7 @@ import {
   Image,
   Dimensions,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 
 import { Settings, Grid, List, Plus } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -30,30 +30,53 @@ export default function ProfileScreen() {
   const [user, setUser] = useState<any>(currentUser);
   const [photos, setPhotos] = useState<string[]>([]);
 
-  React.useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const profile = await api.getUserProfile();
-        if (mounted && profile?.success && profile.data) {
-          // Merge onto current auth user so we don't lose credentials
-          setUser((prev: any) => ({ ...(prev || {}), ...(profile.data as any) }));
-        }
-        const feed = await api.getPosts({ page: 1, limit: 30 } as any);
-        if (mounted && feed?.success && feed.data) {
-          const urls = (feed.data.data || []).flatMap((p: any) => (Array.isArray(p.media) ? p.media : [])
-            .map((m: any) => m?.url)
-            .filter(Boolean));
-          if (urls.length) setPhotos(urls as string[]);
-        }
-      } catch {
-        // No backend posts -> keep existing photos
+  // Load posts function
+  const loadPosts = React.useCallback(async () => {
+    try {
+      const profile = await api.getUserProfile();
+      if (profile?.success && profile.data) {
+        setUser((prev: any) => ({ ...(prev || {}), ...(profile.data as any) }));
       }
-      // Ensure avatar fallback
-      setUser((u: any) => ({ ...(u || {}), avatar: u?.avatar || 'https://i.pravatar.cc/150?img=11' }));
-    })();
-    return () => { mounted = false; };
-  }, []);
+      const feed = await api.getPosts({ page: 1, limit: 100 } as any);
+      if (feed?.success && feed.data) {
+        const allPosts = (feed.data.data || []);
+        // Filter to only show current user's posts
+        const actualUser = (currentUser as any)?.user || currentUser;
+        const userId = actualUser?.userId || actualUser?.id;
+        
+        console.log('🔍 Filtering posts for userId:', userId);
+        console.log('🔍 Sample post structure:', allPosts[0]);
+        console.log('🔍 Sample post author:', allPosts[0]?.author);
+        
+        const userPosts = allPosts.filter((p: any) => {
+          // Try multiple possible userId locations
+          const postUserId = p.userId || p.author?.userId || p.author?.id || p.user?.userId || p.user?.id;
+          console.log('🔍 Checking post:', p.id, 'postUserId:', postUserId, 'matches:', postUserId === userId);
+          const matches = postUserId === userId;
+          if (matches) console.log('✅ Found user post:', p._id || p.id);
+          return matches;
+        });
+        console.log('📸 Total posts:', allPosts.length, 'User posts:', userPosts.length);
+        const urls = userPosts.flatMap((p: any) => (Array.isArray(p.media) ? p.media : [])
+          .map((m: any) => m?.url)
+          .filter(Boolean));
+        console.log('📷 Media URLs found:', urls.length);
+        if (urls.length) setPhotos(urls as string[]);
+      }
+    } catch (err) {
+      console.error('❌ Error loading profile posts:', err);
+      // No backend posts -> keep existing photos
+    }
+    // Ensure avatar fallback
+    setUser((u: any) => ({ ...(u || {}), avatar: u?.avatar || 'https://i.pravatar.cc/150?img=11' }));
+  }, [currentUser]);
+
+  // Reload posts when screen comes into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      loadPosts();
+    }, [loadPosts])
+  );
 
   // Keep local profile in sync with auth user (after edit-profile saves)
   React.useEffect(() => {
@@ -64,6 +87,8 @@ export default function ProfileScreen() {
   const isOwnProfile = !!currentUser;
 
   const resolvedUsername = (
+    user?.fullNames ||
+    currentUser?.fullNames ||
     user?.username ||
     currentUser?.username ||
     currentUser?.displayName ||
@@ -130,7 +155,7 @@ export default function ProfileScreen() {
                 activeOpacity={0.7}
                 onPress={() => router.push({
                   pathname: '/followers',
-                  params: { userId: user.id, username: user.username }
+                  params: { userId: user.id, username: resolvedUsername }
                 })}
               >
                 <Text style={[styles.statValue, { color: colors.text }]}> 
@@ -144,7 +169,7 @@ export default function ProfileScreen() {
                 activeOpacity={0.7}
                 onPress={() => router.push({
                   pathname: '/following',
-                  params: { userId: user.id, username: user.username }
+                  params: { userId: user.id, username: resolvedUsername }
                 })}
               >
                 <Text style={[styles.statValue, { color: colors.text }]}>{resolvedFollowing}</Text>

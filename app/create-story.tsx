@@ -259,6 +259,14 @@ export default function CreateStory() {
   const handleShareStory = async () => {
     if (!mediaUri) return;
 
+    // Check authentication first
+    if (!api.isAuthenticated()) {
+      Alert.alert('Authentication Required', 'Please log in to create stories. You will be redirected to the login screen.', [
+        { text: 'OK', onPress: () => router.push('/login') }
+      ]);
+      return;
+    }
+
     setIsLoading(true);
     try {
       // Prepare RN file for upload
@@ -269,8 +277,10 @@ export default function CreateStory() {
         type: isVideo ? 'video/mp4' : 'image/jpeg',
       } as any;
 
-      // Upload media (mock-safe; will simulate in demo mode)
+      console.log('Uploading story file:', file);
+      // Upload media
       const upload = await api.uploadFile(file);
+      console.log('Story upload response:', upload);
       const url = (upload as any)?.data?.url || mediaUri;
       const m: MediaFile = {
         id: `m-${Date.now()}`,
@@ -279,18 +289,30 @@ export default function CreateStory() {
         size: (upload as any)?.data?.size || 0,
       } as any;
 
-      // Create story via API (handles mock persistence too)
-      await api.createStory({ media: m });
+      console.log('Creating story with media:', m);
+      // Create story via API with proper structure
+      const storyResponse = await api.createStory({ 
+        content: '', // Empty content is fine when media is provided
+        media: m 
+      });
+      console.log('Story creation response:', storyResponse);
 
-      Alert.alert(
-        'Story Shared!',
-        'Your story has been shared successfully!',
-        [{ text: 'OK', onPress: () => router.back() }]
-      );
+      if (storyResponse.success) {
+        console.log('✅ Story created successfully!');
+        console.log('📖 Story data from backend:', JSON.stringify(storyResponse.data, null, 2));
+        
+        setIsLoading(false);
+        
+        // Navigate to success screen
+        router.replace('/story-success');
+        return;
+      } else {
+        throw new Error(storyResponse.error || 'Failed to create story');
+      }
     } catch (error) {
-      Alert.alert('Error', 'Failed to share story. Please try again.');
-    } finally {
+      console.error('Story creation error:', error);
       setIsLoading(false);
+      Alert.alert('Error', `Failed to share story: ${(error as any).message || 'Please try again.'}`);
     }
   };
 

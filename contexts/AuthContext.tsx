@@ -39,7 +39,8 @@ export const [AuthProvider, useAuth] = createContextHook<AuthState>(() => {
       ...u,
       username: u.username || emailPrefix,
       displayName: u.displayName || u.username || emailPrefix,
-      avatar: u.avatar || 'https://i.pravatar.cc/150?img=11',
+      // Don't set mock avatar - leave undefined if user hasn't set one
+      avatar: u.avatar || u.profilePictureURL || undefined,
     } as User;
   };
   const [isLoading, setIsLoading] = useState(true);
@@ -100,23 +101,35 @@ export const [AuthProvider, useAuth] = createContextHook<AuthState>(() => {
     setIsLoading(true);
     setError(null);
     try {
+      console.log('🔐 AuthContext: Starting login process');
       const response = await api.login(credentials);
+      console.log('📡 AuthContext: API response:', response);
+      
       if (response.success && response.data) {
         const data: any = response.data as any;
+        console.log('✅ AuthContext: Login successful, processing data:', data);
+        
         const nu = normalizeUser(data.user);
         setUser(nu);
         await saveAuthState(nu);
+        
         const accessToken = api.getAccessToken() || '';
+        console.log('🔑 AuthContext: Access token:', accessToken ? 'Present' : 'Missing');
+        
         // Persist refresh token when available (for account switching reliability)
         const acc = { user: data.user, accessToken, refreshToken: (data.refreshToken || '') } as any;
         const idx = accounts.findIndex(a => a.user.id === data.user.id);
         const next = [...accounts];
         if (idx >= 0) next[idx] = acc; else next.push(acc);
         await persistAccounts(next);
+        
+        console.log('✅ AuthContext: Login process completed successfully');
       } else {
+        console.error('❌ AuthContext: Login failed:', response.error);
         throw new Error(response.error || 'Login failed');
       }
     } catch (error: any) {
+      console.error('❌ AuthContext: Login error:', error);
       const status = error?.statusCode || error?.status;
       const rawMsg = String(error?.message || '');
       let errorMessage = 'Login failed. Please try again.';
@@ -204,17 +217,32 @@ export const [AuthProvider, useAuth] = createContextHook<AuthState>(() => {
   const logout = async () => {
     setIsLoading(true);
     try {
-      // Call API logout endpoint
-      await api.logout();
-      // Clear local state
-      await AsyncStorage.removeItem(AUTH_STORAGE_KEY);
-      setUser(null);
-      setError(null);
-    } catch (error) {
-      console.error('Logout failed:', error);
-      // Even if API call fails, clear local state
+      console.log('🚪 Logging out...');
+      
+      // Call API logout endpoint (best effort)
+      try {
+        await api.logout();
+      } catch (e) {
+        console.warn('API logout failed (continuing anyway):', e);
+      }
+      
+      // Clear ALL auth data
       await api.clearTokens();
       await AsyncStorage.removeItem(AUTH_STORAGE_KEY);
+      await AsyncStorage.removeItem('@dovio_mock_mode');
+      
+      // Clear state
+      setUser(null);
+      setError(null);
+      
+      console.log('✅ Logout successful');
+    } catch (error) {
+      console.error('❌ Logout error:', error);
+      // Force clear even on error
+      try {
+        await api.clearTokens();
+        await AsyncStorage.clear();
+      } catch {}
       setUser(null);
       setError(null);
     } finally {

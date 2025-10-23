@@ -51,13 +51,20 @@ export default function LoginScreen() {
 
     setIsLoading(true);
     try {
+      console.log('🔐 Attempting login with:', { email, password: '***' });
+      
       // Quick connectivity check
       const healthy = await api.healthCheck();
+      console.log('🏥 Health check result:', healthy);
       if (!healthy) throw new Error('Cannot reach server. Please start the backend.');
 
-      await login({ email, password });
+      console.log('📡 Calling login API...');
+      const loginResult = await login({ email, password });
+      console.log('✅ Login successful:', loginResult);
+      
       router.replace('/(tabs)/home');
     } catch (error: any) {
+      console.error('❌ Login error:', error);
       const msg = error?.message || 'Failed to login. Please try again.';
       if (/verify\s*.*email/i.test(msg)) {
         router.push({ pathname: '/verify-email', params: { email } });

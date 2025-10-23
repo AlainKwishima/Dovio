@@ -829,14 +829,17 @@ class ApiService {
       return { success: true, data: this.paginate<Story>(mapped, page, limit) } as ApiResponse<PaginatedResponse<Story>>;
     }
     try {
-      const resp = await this.get<PaginatedResponse<Story>>(API_ENDPOINTS.STORIES.BASE, params);
-      const page = params?.page || 1; const limit = params?.limit || 20;
-      const mine = await this.loadMockUserStories();
-      if (resp?.data && Array.isArray((resp.data as any).data)) {
-        const merged = [...mine, ...((resp.data as any).data || [])];
-        return { success: true, data: this.paginate<Story>(merged as any, page, limit) } as any;
+      const resp = await this.get<any>(API_ENDPOINTS.STORIES.BASE, params);
+      console.log('📖 Backend stories response:', resp);
+      if (resp?.data) {
+        // Backend returns { data: { stories: [...], pagination: {...} } }
+        const stories = (resp.data.stories || resp.data.data || []);
+        console.log('📖 Extracted stories from backend:', stories.length, stories);
+        return { success: true, data: { data: stories, pagination: resp.data.pagination } } as any;
       }
-    } catch {}
+    } catch (err) {
+      console.error('❌ Error fetching stories from backend:', err);
+    }
     const page = params?.page || 1; const limit = params?.limit || 20;
     const mapped = mockStories.map(s => this.mockApiStoryFromMock(s));
     return { success: true, data: this.paginate<Story>(mapped, page, limit) } as ApiResponse<PaginatedResponse<Story>>;
@@ -865,9 +868,18 @@ class ApiService {
       return { success: true, data: s } as ApiResponse<Story>;
     }
     try {
-      const resp = await this.post<Story>(API_ENDPOINTS.STORIES.BASE, data);
+      // Map mobile payload to backend format
+      const backendPayload: any = {
+        storyText: data.content || '',
+        mediaURL: data.media?.url || '',
+        mediaType: data.media?.type || 'image',
+      };
+      console.log('Sending story payload to backend:', backendPayload);
+      const resp = await this.post<Story>(API_ENDPOINTS.STORIES.BASE, backendPayload);
       return resp;
-    } catch {
+    } catch (error) {
+      console.error('Backend story creation failed:', error);
+      console.error('Error details:', JSON.stringify(error, null, 2));
       const s: Story = {
         id: `story-${Date.now()}`,
         author: this.mockUser(),

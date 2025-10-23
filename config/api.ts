@@ -159,6 +159,11 @@ export const API_ENDPOINTS = {
     PENDING: '/api/tags/pending',
   },
 
+  // Upload
+  UPLOAD: {
+    BASE: '/api/upload',
+  },
+
   // System
   HEALTH: '/health',
   DOCS: '/api/docs',

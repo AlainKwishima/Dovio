@@ -18,7 +18,7 @@ const router = express.Router();
 
 // Validation schemas
 const createStorySchema = Joi.object({
-  storyText: Joi.string().max(1000).optional(),
+  storyText: Joi.string().max(1000).allow('').optional(),
   mediaURL: Joi.string().uri().max(5000).optional(),
   mediaType: Joi.string().valid('image', 'video', 'text').default('text')
 }).custom((value, helpers) => {

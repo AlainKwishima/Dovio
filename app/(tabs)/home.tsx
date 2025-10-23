@@ -7,11 +7,12 @@ import {
   TouchableOpacity,
   RefreshControl,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Settings, Bell, Search } from 'lucide-react-native';
 import type { Post } from '@/types';
 import api from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
 
 import StoryCircle from '@/components/StoryCircle';
 import PostCard from '@/components/PostCard';
@@ -22,16 +23,31 @@ export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
+  const { user, isAuthenticated } = useAuth();
   const [refreshing, setRefreshing] = React.useState(false);
   const [filter, setFilter] = React.useState<'all' | 'post' | 'article'>('all');
   const [feed, setFeed] = React.useState<any[]>([]);
   const [storiesList, setStoriesList] = React.useState<any[]>([]);
 
+  // Debug authentication status
+  React.useEffect(() => {
+    console.log('🔐 Auth Status:', {
+      isAuthenticated,
+      hasUser: !!user,
+      userId: user?.id,
+      apiAuthenticated: api.isAuthenticated(),
+      accessToken: api.getAccessToken() ? 'Present' : 'Missing'
+    });
+  }, [isAuthenticated, user]);
+
   const loadFeed = React.useCallback(async () => {
     try {
+      console.log('🔄 Loading feed...');
       const res = await api.getFeed({ page: 1, limit: 20 });
+      console.log('📡 Feed API response:', res);
       if (res.success && res.data) {
         const items = (res.data.data || []) as any[];
+        console.log('📝 Feed items count:', items.length);
         // Map API posts to UI Post type (components/PostCard expects fields from '@/types')
         const mapped: Post[] = items.map((p: any) => {
           const author = p.author || {};
@@ -63,37 +79,101 @@ export default function HomeScreen() {
             tags: p.tags || [],
           } as Post;
         });
+        console.log('📱 Mapped posts for display:', mapped.length);
+        console.log('📱 First few posts:', mapped.slice(0, 3).map(p => ({ id: p.id, caption: p.caption?.substring(0, 50) })));
         setFeed(mapped);
       }
-    } catch {}
+    } catch (error) {
+      console.error('❌ Error loading feed:', error);
+    }
   }, []);
 
-  React.useEffect(() => { loadFeed(); }, [loadFeed]);
-  React.useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const res = await api.getStories({ page: 1, limit: 30 });
-        if (mounted && res.success && res.data) {
-          const items = (res.data.data || []).map((s: any) => ({
-            id: s.id || s._id || s.storyId,
+  const loadStories = React.useCallback(async () => {
+    try {
+      console.log('📖 Loading stories for user:', user?.id);
+      console.log('📖 Full user object:', JSON.stringify(user, null, 2));
+      const res = await api.getStories({ page: 1, limit: 30 });
+      console.log('📖 Stories API response:', res);
+      if (res.success && res.data) {
+        const items = (res.data.data || []).map((s: any) => ({
+          id: s.id || s._id || s.storyId,
+          user: {
+            id: s.author?.id || s.userId,
+            username: s.author?.username || s.author?.displayName || 'user',
+            avatar: s.author?.avatar || s.author?.profilePictureURL,
+          },
+        }));
+        
+        console.log('📖 All stories:', items.length);
+        
+        // Filter to only show current user's stories (no mock data)
+        // Handle both id and userId fields from backend
+        // Fix: user object might be nested as {user: {id: ...}}
+        const actualUser = (user as any)?.user || user;
+        const currentUserId = actualUser?.id || actualUser?.userId || 'current-user';
+        console.log('📖 Current user ID:', currentUserId);
+        const userStories = items.filter((s: any) => {
+          const storyUserId = s.user.id || s.user.userId || s.userId;
+          console.log('📖 Comparing story user ID:', storyUserId, 'with current user:', currentUserId);
+          return storyUserId === currentUserId;
+        });
+        console.log('📖 User stories:', userStories.length, userStories);
+        
+        // Group stories by user
+        const groupedStories: any[] = [];
+        
+        // Always add the "Create Story" circle first
+        if (user) {
+          const actualUser = (user as any)?.user || user;
+          groupedStories.push({
+            id: 'create-story',
             user: {
-              id: s.author?.id || s.userId,
-              username: s.author?.username || s.author?.displayName || 'user',
-              avatar: s.author?.avatar || s.author?.profilePictureURL,
+              id: actualUser.id || actualUser.userId,
+              username: actualUser.username || actualUser.displayName || 'Your Story',
+              avatar: actualUser.avatar || actualUser.profilePictureURL,
             },
-          }));
-          setStoriesList(items);
+            isCreateStory: true,
+          });
         }
-      } catch {}
-    })();
-    return () => { mounted = false; };
-  }, []);
+        
+        // Add user's own stories if they exist
+        if (userStories.length > 0 && user) {
+          const actualUser = (user as any)?.user || user;
+          groupedStories.push({
+            id: `my-stories`,
+            user: {
+              id: actualUser.id || actualUser.userId,
+              username: actualUser.username || actualUser.displayName || 'My Stories',
+              avatar: actualUser.avatar || actualUser.profilePictureURL,
+            },
+            isCurrentUser: true,
+            count: userStories.length,
+          });
+        }
+        
+        console.log('📖 Final grouped stories:', groupedStories);
+        setStoriesList(groupedStories);
+      }
+    } catch (err) {
+      console.error('❌ Error loading stories:', err);
+    }
+  }, [user]);
+
+  React.useEffect(() => { loadFeed(); }, [loadFeed]);
+  React.useEffect(() => { loadStories(); }, [loadStories]);
+
+  // Refresh data when screen comes into focus (e.g., returning from create post/story)
+  useFocusEffect(
+    React.useCallback(() => {
+      loadFeed();
+      loadStories();
+    }, [loadFeed, loadStories])
+  );
 
   const onRefresh = React.useCallback(() => {
     setRefreshing(true);
-    loadFeed().finally(() => setRefreshing(false));
-  }, [loadFeed]);
+    Promise.all([loadFeed(), loadStories()]).finally(() => setRefreshing(false));
+  }, [loadFeed, loadStories]);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -127,9 +207,6 @@ export default function HomeScreen() {
         <View style={[styles.storiesContainer, { backgroundColor: colors.card }]}>
           <View style={styles.storiesHeader}>
             <Text style={[styles.storiesTitle, { color: colors.text }]}>Stories</Text>
-            <TouchableOpacity onPress={() => router.push('/story-options')}>
-              <Text style={[styles.createStoryLink, { color: colors.tint }]}>+ Create</Text>
-            </TouchableOpacity>
           </View>
           <ScrollView 
             horizontal 
@@ -138,15 +215,21 @@ export default function HomeScreen() {
             contentContainerStyle={styles.storiesScrollContent}
           >
             <View style={styles.storiesPadding}>
-              {storiesList.map((story, index) => (
+              {storiesList.map((story) => (
                 <StoryCircle
                   key={story.id}
                   story={story}
-                  isCurrentUser={index === 0}
+                  isCurrentUser={story.isCurrentUser}
                   onPress={() => {
-                    if (index === 0) {
-                      // Current user story - navigate to story options
+                    if (story.isCreateStory) {
+                      // Create story circle - navigate to story options
                       router.push('/story-options');
+                    } else if (story.isCurrentUser) {
+                      // Current user story - navigate to story viewer to view own stories
+                      router.push({
+                        pathname: '/story-viewer',
+                        params: { userId: user?.id },
+                      });
                     } else {
                       // Other user's story - navigate to story viewer
                       router.push({

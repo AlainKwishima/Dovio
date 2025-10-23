@@ -57,6 +57,14 @@ export default function CreatePostScreen() {
   };
 
   const handlePost = async () => {
+    // Check authentication first
+    if (!api.isAuthenticated()) {
+      Alert.alert('Authentication Required', 'Please log in to create posts. You will be redirected to the login screen.', [
+        { text: 'OK', onPress: () => router.push('/login') }
+      ]);
+      return;
+    }
+
     if (postType === 'post' && !imageUri) {
       Alert.alert('Error', 'Please select media for your post');
       return;
@@ -81,23 +89,38 @@ export default function CreatePostScreen() {
     try {
       let mediaUrl: string | undefined;
       if (imageUri) {
+        console.log('Uploading file:', { uri: imageUri, mediaType });
         const file: any = { uri: imageUri, name: `upload-${Date.now()}.${mediaType === 'video' ? 'mp4' : 'jpg'}`, type: mediaType === 'video' ? 'video/mp4' : 'image/jpeg' };
         const res = await api.uploadFile(file);
+        console.log('Upload response:', res);
         mediaUrl = (res as any)?.data?.url || (res as any)?.url;
       }
 
       const media = mediaUrl ? [{ id: `m-${Date.now()}`, type: mediaType, url: mediaUrl, size: 0 } as any] : [];
-      const created = await api.createPost({
+      const postData = {
         content: postType === 'article' ? (content || caption) : caption,
         type: postType,
         media,
         tags: tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : undefined,
         visibility: 'public',
-      });
-      await addEarnings(15.0, 'post', `New ${postType} created`);
-      Alert.alert('Success!', `Your ${postType} has been published successfully!`, [{ text: 'OK', onPress: () => router.back() }]);
+      };
+      console.log('Creating post with data:', postData);
+      const created = await api.createPost(postData);
+      console.log('Create post response:', created);
+      
+      if (created.success) {
+        await addEarnings(15.0, 'post', `New ${postType} created`);
+        Alert.alert(
+          '🎉 Success!', 
+          `Your ${postType} has been published successfully!\n\nIt will now appear in your gallery and feed.`, 
+          [{ text: 'Awesome!', onPress: () => router.back() }]
+        );
+      } else {
+        throw new Error(created.error || 'Failed to create post');
+      }
     } catch (error) {
-      Alert.alert('Error', 'Failed to create post. Please try again.');
+      console.error('Post creation error:', error);
+      Alert.alert('Error', `Failed to create post: ${error.message || 'Please try again.'}`);
     } finally {
       setIsPosting(false);
     }

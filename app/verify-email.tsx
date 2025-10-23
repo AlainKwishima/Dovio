@@ -26,7 +26,9 @@ export default function VerifyEmailScreen() {
             return;
           }
         }
-        await api.verifyEmail(token);
+        console.log('🔐 Verifying email with token:', token);
+        const result = await api.verifyEmail(token);
+        console.log('✅ Email verification result:', result);
         setStatus('success');
         Animated.sequence([
           Animated.spring(scaleAnim, { toValue: 1, useNativeDriver: true }),
@@ -36,6 +38,7 @@ export default function VerifyEmailScreen() {
           router.replace('/login');
         }, 3500);
       } catch (e) {
+        console.error('❌ Email verification error:', e);
         setStatus('error');
       }
     })();

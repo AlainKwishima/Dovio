@@ -68,18 +68,26 @@ export default function RegisterScreen() {
 
     setIsLoading(true);
     try {
+      console.log('📝 Starting registration process');
       const healthy = await api.healthCheck();
+      console.log('🏥 Health check result:', healthy);
       if (!healthy) throw new Error('Cannot reach server. Please start the backend.');
 
-      const regData = await register({
+      const registrationData = {
         username,
         email,
         password,
         confirmPassword,
         displayName: name,
-      });
+      };
+      
+      console.log('📝 Registration data:', { ...registrationData, password: '***', confirmPassword: '***' });
+      const regData = await register(registrationData);
+      console.log('✅ Registration result:', regData);
+      
       // On success, direct to verify email screen; include token in dev if provided
       const token = (regData && (regData as any).emailVerificationToken) || undefined;
+      console.log('🔐 Email verification token:', token ? 'Present' : 'Missing');
       if (token) {
         try { await AsyncStorage.setItem('lastEmailVerifyToken', token); } catch {}
       }

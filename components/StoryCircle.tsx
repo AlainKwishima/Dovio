@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Plus } from 'lucide-react-native';
+import { Plus, User } from 'lucide-react-native';
 import { Story } from '@/types';
 import { BORDER_RADIUS, SPACING, FONT_SIZE, FONT_WEIGHT, NEUMORPHIC } from '@/constants/theme';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -14,19 +14,43 @@ interface StoryCircleProps {
 
 export default function StoryCircle({ story, onPress, isCurrentUser = false }: StoryCircleProps) {
   const { colors } = useTheme();
+  const isCreateStory = (story as any).isCreateStory;
+  
+  const renderAvatar = () => {
+    if (story.user.avatar) {
+      return <Image source={{ uri: story.user.avatar }} style={styles.avatar} />;
+    }
+    // Placeholder when no avatar
+    return (
+      <View style={[styles.avatar, { backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' }]}>
+        <User size={32} color={colors.textSecondary} strokeWidth={1.5} />
+      </View>
+    );
+  };
   
   return (
     <TouchableOpacity style={styles.container} onPress={onPress} activeOpacity={0.7}>
       <View style={styles.avatarContainer}>
-        {isCurrentUser ? (
-          <View style={[styles.currentUserBorder, { backgroundColor: colors.border }]}>
+        {isCreateStory ? (
+          <View style={[styles.createStoryBorder, { borderColor: colors.border }]}>
             <View style={[styles.avatarInner, { backgroundColor: colors.card }]}>
-              <Image source={{ uri: story.user.avatar }} style={styles.avatar} />
+              {renderAvatar()}
               <View style={[styles.addIcon, { backgroundColor: colors.tint }]}>
                 <Plus size={16} color="#FFFFFF" />
               </View>
             </View>
           </View>
+        ) : isCurrentUser ? (
+          <LinearGradient
+            colors={[colors.gradient.start, colors.gradient.end]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.gradientBorder}
+          >
+            <View style={[styles.avatarInner, { backgroundColor: colors.card }]}>
+              {renderAvatar()}
+            </View>
+          </LinearGradient>
         ) : !story.isViewed ? (
           <LinearGradient
             colors={[colors.gradient.start, colors.gradient.end]}
@@ -35,19 +59,19 @@ export default function StoryCircle({ story, onPress, isCurrentUser = false }: S
             style={styles.gradientBorder}
           >
             <View style={[styles.avatarInner, { backgroundColor: colors.card }]}>
-              <Image source={{ uri: story.user.avatar }} style={styles.avatar} />
+              {renderAvatar()}
             </View>
           </LinearGradient>
         ) : (
           <View style={[styles.viewedBorder, { backgroundColor: colors.border }]}>
             <View style={[styles.avatarInner, { backgroundColor: colors.card }]}>
-              <Image source={{ uri: story.user.avatar }} style={styles.avatar} />
+              {renderAvatar()}
             </View>
           </View>
         )}
       </View>
       <Text style={[styles.username, { color: colors.text }]} numberOfLines={1}>
-        {isCurrentUser ? 'Your Story' : story.user.username}
+        {isCreateStory ? 'Your Story' : isCurrentUser ? 'My Stories' : (story.user.fullNames || story.user.username || 'User')}
       </Text>
     </TouchableOpacity>
   );
@@ -75,6 +99,14 @@ const styles = StyleSheet.create({
     padding: 3,
   },
   currentUserBorder: {
+    width: 76,
+    height: 76,
+    borderRadius: BORDER_RADIUS.full,
+    padding: 3,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+  },
+  createStoryBorder: {
     width: 76,
     height: 76,
     borderRadius: BORDER_RADIUS.full,

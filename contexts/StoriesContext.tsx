@@ -11,6 +11,7 @@ import {
   UpdateHighlightRequest
 } from '../services/api';
 import { handleApiError, withLoadingState } from '../utils/errorHandler';
+import { useAuth } from './AuthContext';
 
 interface StoriesState {
   // Story data
@@ -46,6 +47,8 @@ interface StoriesState {
 }
 
 export const [StoriesProvider, useStories] = createContextHook<StoriesState>(() => {
+  const { user, isAuthenticated } = useAuth();
+  
   // Story state
   const [stories, setStories] = useState<StoryResponse[]>([]);
   const [userStories, setUserStories] = useState<Record<string, StoryResponse[]>>({});
@@ -53,18 +56,6 @@ export const [StoriesProvider, useStories] = createContextHook<StoriesState>(() 
   const [viewedStories, setViewedStories] = useState<Set<string>>(new Set());
   const [isLoadingStories, setIsLoadingStories] = useState(false);
   const [storiesError, setStoriesError] = useState<string | null>(null);
-  
-  // Initialize stories data on mount
-  useEffect(() => {
-    const initializeStories = async () => {
-      await Promise.all([
-        getStories(1),
-        getHighlights(),
-      ]);
-    };
-    
-    initializeStories();
-  }, []);
   
   // Story operations
   const createStory = useCallback(async (storyData: CreateStoryRequest): Promise<StoryResponse | null> => {
@@ -121,6 +112,10 @@ export const [StoriesProvider, useStories] = createContextHook<StoriesState>(() 
   }, []);
   
   const getStories = useCallback(async (page: number = 1): Promise<void> => {
+    // Only fetch if authenticated
+    if (!isAuthenticated) {
+      return;
+    }
     await withLoadingState(async () => {
       const response = await api.getStories({ page, limit: 20 });
       if (response?.data) {
@@ -131,7 +126,21 @@ export const [StoriesProvider, useStories] = createContextHook<StoriesState>(() 
         }
       }
     }, setIsLoadingStories, setStoriesError);
-  }, []);
+  }, [isAuthenticated]);
+  
+  // Initialize stories data when authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      const initializeStories = async () => {
+        await Promise.all([
+          getStories(1),
+          getHighlights(),
+        ]);
+      };
+      
+      initializeStories();
+    }
+  }, [isAuthenticated]);
   
   const getUserStories = useCallback(async (userId: string): Promise<void> => {
     await withLoadingState(async () => {

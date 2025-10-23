@@ -39,19 +39,25 @@ export default function SettingsScreen() {
   const [useDemoContent, setUseDemoContent] = useState(api.getMockMode());
 
   const handleLogout = () => {
+    console.log('🔴 Logout button clicked');
     Alert.alert(
       'Logout',
       'Are you sure you want to logout?',
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: 'Cancel', style: 'cancel', onPress: () => console.log('❌ Logout cancelled') },
         {
           text: 'Logout',
           style: 'destructive',
           onPress: async () => {
+            console.log('✅ Logout confirmed, starting logout process...');
             try {
               await logout();
+              console.log('✅ Logout completed, redirecting to login...');
+            } catch (error) {
+              console.error('❌ Logout error:', error);
             } finally {
               router.replace('/login');
+              console.log('✅ Redirected to login page');
             }
           },
         },

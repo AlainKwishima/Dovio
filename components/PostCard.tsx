@@ -116,7 +116,7 @@ export default function PostCard({ post, onPress, onLike, onComment, onShare }: 
           <Image source={{ uri: post.user.avatar }} style={styles.avatar} />
           <View style={styles.userText}>
             <View style={styles.userNameRow}>
-              <Text style={[styles.username, { color: colors.text }]}>{post.user.username}</Text>
+              <Text style={[styles.username, { color: colors.text }]}>{post.user.fullNames || post.user.username || 'User'}</Text>
               {post.user.isVerified && (
                 <View style={[styles.verifiedBadge, { backgroundColor: colors.tint }]}>
                   <Text style={styles.verifiedText}>✓</Text>
