@@ -24,7 +24,7 @@ export default function FollowingScreen() {
   const params = useLocalSearchParams<{ userId?: string; username?: string }>();
   const { colors } = useTheme();
   const { user: currentUser } = useAuth();
-  const { isFollowing, toggleFollow } = useSocial();
+  const { isFollowing, checkFollowStatus, toggleFollow } = useSocial();
   const insets = useSafeAreaInsets();
 
   const [following, setFollowing] = useState<any[]>([]);
@@ -51,12 +51,30 @@ export default function FollowingScreen() {
     let mounted = true;
     (async () => {
       try {
-        const res = await api.getFollowing(String(params.userId || ''));
-        if (mounted && res.success && res.data) setFollowing(res.data as any[]);
-      } catch {}
+        const targetId = (params.userId as string) || (currentUser as any)?.id || (currentUser as any)?.userId || '';
+        const res = await api.getFollowing(String(targetId));
+        console.log('👥 Following response:', res);
+        if (mounted && res.success && res.data) {
+          // Ensure data is an array
+          const followingData = Array.isArray(res.data) ? res.data : [];
+          console.log('👥 Following array:', followingData);
+          setFollowing(followingData);
+          
+          // Check follow status for each user being followed
+          followingData.forEach(async (user: any) => {
+            const userId = user.id || user.userId;
+            if (userId && userId !== currentUser?.id) {
+              await checkFollowStatus(userId);
+            }
+          });
+        }
+      } catch (error) {
+        console.error('❌ Error loading following:', error);
+        if (mounted) setFollowing([]);
+      }
     })();
     return () => { mounted = false; };
-  }, [params.userId]);
+  }, [params.userId, currentUser?.id, checkFollowStatus]);
 
   const handleUserPress = (user: any) => {
     router.push({
@@ -99,6 +117,11 @@ export default function FollowingScreen() {
         ]}
       >
         <ScrollView showsVerticalScrollIndicator={false}>
+          {following.length === 0 && (
+            <View style={styles.emptyContainer}>
+              <Text style={[styles.emptyText, { color: colors.subtext }]}>Not following anyone yet</Text>
+            </View>
+          )}
           {following.map((user, index) => {
             const isFollowingUser = isFollowing(user.id || user.userId);
             const isCurrentUser = currentUser?.id === (user.id || user.userId);
@@ -292,5 +315,14 @@ const styles = StyleSheet.create({
   followingText: {
     fontSize: FONT_SIZE.sm,
     fontWeight: FONT_WEIGHT.bold,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 60,
+  },
+  emptyText: {
+    fontSize: FONT_SIZE.md,
   },
 });

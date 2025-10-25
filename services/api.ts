@@ -102,9 +102,22 @@ class ApiService {
           AsyncStorage.getItem('accessToken'),
           AsyncStorage.getItem('refreshToken'),
         ]);
-        if (at) this.accessToken = at;
-        if (rt) this.refreshToken = rt;
-      } catch {}
+        if (at) {
+          this.accessToken = at;
+          console.log('🔑 [API] Loaded accessToken from storage');
+        }
+        if (rt) {
+          this.refreshToken = rt;
+          console.log('🔑 [API] Loaded refreshToken from storage');
+        }
+        if (!at && !rt) {
+          console.log('⚠️ [API] No tokens found in storage');
+        }
+      } catch (err) {
+        console.error('❌ [API] Error loading tokens:', err);
+      }
+    } else {
+      console.log('✅ [API] Tokens already in memory');
     }
   }
 
@@ -115,6 +128,24 @@ class ApiService {
       const v = await AsyncStorage.getItem('@dovio_mock_mode');
       this.mockOverride = v === '1' || v === 'true';
     } catch {}
+  }
+
+  // Fix media URLs that have wrong host (e.g. old IP address)
+  private fixMediaUrl(url: string): string {
+    if (!url) return url;
+    
+    // If URL is relative, prepend current base URL
+    if (url.startsWith('/uploads/')) {
+      return `${API_CONFIG.BASE_URL}${url}`;
+    }
+    
+    // If URL has http://SOME_IP:5000/uploads/..., replace with current base URL
+    const uploadPathMatch = url.match(/https?:\/\/[^/]+(\/uploads\/.+)$/);
+    if (uploadPathMatch) {
+      return `${API_CONFIG.BASE_URL}${uploadPathMatch[1]}`;
+    }
+    
+    return url;
   }
 
   setMockMode(value: boolean) {
@@ -359,9 +390,9 @@ class ApiService {
       // Classify common RN fetch errors
       const msg = (error && error.message) || '';
       if (error?.name === 'AbortError') {
-        error.name = 'TimeoutError';
+        Object.defineProperty(error, 'name', { value: 'TimeoutError', writable: true });
       } else if (error?.name === 'TypeError' || msg.includes('Network request failed')) {
-        error.name = 'NetworkError';
+        Object.defineProperty(error, 'name', { value: 'NetworkError', writable: true });
       }
 
       // Handle token expiration
@@ -564,13 +595,47 @@ class ApiService {
     }
     try {
       const resp = await this.get<User>(API_ENDPOINTS.USERS.PROFILE);
-      if (resp?.data) return resp;
-      // fallthrough to mock when empty
+      if (resp?.data) {
+        console.log('✅ Got real user profile:', resp.data);
+        // Normalize backend user fields to frontend shape (ensure id, avatar, displayName)
+        const userData: any = (resp.data as any).user || resp.data;
+        const normalized = {
+          ...userData,
+          id: userData.id || userData.userId || userData._id,
+          avatar: userData.profilePictureURL || userData.avatar,
+          displayName: userData.fullNames || userData.displayName,
+        } as any;
+        return { success: true, data: normalized } as any;
+      }
+      throw new Error('No user data in response');
     } catch (e) {
-      // ignore and fallback
+      console.error('❌ Failed to get user profile:', e);
+      throw e; // Don't fallback to mock - let caller handle the error
     }
-    const mock = this.mockUser();
-    return { success: true, data: mock } as ApiResponse<User>;
+  }
+
+  async getUserById(userId: string): Promise<ApiResponse<User>> {
+    if (this.shouldUseMockFallback()) {
+      return { success: true, data: this.mockUser() } as ApiResponse<User>;
+    }
+    try {
+      console.log('🔍 Fetching user by ID (direct endpoint):', userId);
+      const resp = await this.get<User>(API_ENDPOINTS.USERS.BY_ID(userId));
+      if (resp?.data) {
+        const userData: any = (resp.data as any).user || resp.data;
+        const normalized = {
+          ...userData,
+          id: userData.id || userData.userId || userData._id,
+          avatar: userData.profilePictureURL || userData.avatar,
+          displayName: userData.fullNames || userData.displayName,
+        } as any;
+        return { success: true, data: normalized } as any;
+      }
+      throw new Error('User not found');
+    } catch (e) {
+      console.error('❌ Failed to get user by ID:', e);
+      throw e;
+    }
   }
 
   async updateUserProfile(data: UpdateUserRequest): Promise<ApiResponse<User>> {
@@ -578,14 +643,44 @@ class ApiService {
       const merged = { ...this.mockUser(), ...data } as User;
       return { success: true, data: merged } as ApiResponse<User>;
     }
-    try {
-      const resp = await this.put<User>(API_ENDPOINTS.USERS.PROFILE, data);
-      return resp;
-    } catch {
-      // Hybrid fallback: update locally
-      const merged = { ...this.mockUser(), ...data } as User;
-      return { success: true, data: merged } as ApiResponse<User>;
+    
+    // Transform frontend field names to backend field names
+    const backendData: any = {};
+    
+    // Map avatar -> profilePictureURL
+    if (data.avatar !== undefined) {
+      backendData.profilePictureURL = data.avatar;
     }
+    
+    // Map displayName -> fullNames
+    if (data.displayName !== undefined) {
+      backendData.fullNames = data.displayName;
+    }
+    
+    // Pass through other fields
+    if (data.bio !== undefined) backendData.bio = data.bio;
+    if (data.username !== undefined) backendData.username = data.username;
+    
+    console.log('📤 Sending profile update to backend:', backendData);
+    
+    const response = await this.put<any>(API_ENDPOINTS.USERS.PROFILE, backendData);
+    
+    console.log('📥 Backend profile update response:', response);
+    
+    // Transform backend response back to frontend format
+    if (response.success && response.data) {
+      const userData = (response.data as any).user || response.data;
+      return {
+        success: true,
+        data: {
+          ...userData,
+          avatar: userData.profilePictureURL || userData.avatar,
+          displayName: userData.fullNames || userData.displayName,
+        }
+      } as ApiResponse<User>;
+    }
+    
+    return response as ApiResponse<User>;
   }
 
   async deleteAccount(): Promise<ApiResponse<void>> {
@@ -628,18 +723,128 @@ class ApiService {
       return { success: true, data: this.paginate<Post>(mapped, page, limit) } as ApiResponse<PaginatedResponse<Post>>;
     }
     try {
-      const resp = await this.get<PaginatedResponse<Post>>(API_ENDPOINTS.POSTS.BASE, params);
-      const page = (params?.page as number) || 1; const limit = (params?.limit as number) || 20;
-      const mine = await this.loadMockUserPosts();
-      if (resp?.data && Array.isArray((resp.data as any).data)) {
-        const data = (resp.data as any).data;
-        const merged = [...mine, ...data];
-        return { success: true, data: this.paginate<Post>(merged as any, page, limit) } as any;
+      const resp = await this.get<any>(API_ENDPOINTS.POSTS.BASE, params);
+      console.log('📥 Backend getPosts response:', resp);
+      
+      if (resp?.data) {
+        const backendPosts = resp.data.posts || resp.data.data || [];
+        console.log('📝 Raw backend posts:', backendPosts.length);
+        
+        // Get current user profile once to use for posts without user data
+        let currentUserProfile: User | null = null;
+        try {
+          const profileResp = await this.getUserProfile();
+          if (profileResp?.success && profileResp.data) {
+            currentUserProfile = profileResp.data;
+            console.log('👤 Current user for posts:', currentUserProfile.id);
+          }
+        } catch {}
+        
+        // Transform backend posts to Post format
+        const transformedPosts: Post[] = backendPosts.map((bp: any): Post | null => {
+          // Debug first post structure
+          if (backendPosts.indexOf(bp) === 0) {
+            console.log('🔍 [API] First backend post structure:', bp);
+            console.log('🔍 [API] Backend post.user:', bp.user);
+            console.log('🔍 [API] Backend post.userId:', bp.userId);
+            console.log('🔍 [API] Backend post.mediaURLs:', bp.mediaURLs);
+            console.log('🔍 [API] Backend post.content:', bp.content);
+            console.log('🔍 [API] Backend post.content.mediaUrls:', bp.content?.mediaUrls);
+          }
+          
+          // Get author info
+          let author: User;
+          
+          // Check if backend populated the user object
+          if (bp.user && (bp.user.userId || bp.user._id)) {
+            author = {
+              id: bp.user.userId || bp.user._id || bp.user.id,
+              username: bp.user.username || bp.user.fullNames || 'user',
+              email: bp.user.email || '',
+              displayName: bp.user.fullNames || bp.user.displayName || bp.user.username || 'User',
+              bio: bp.user.bio || '',
+              avatar: bp.user.profilePictureURL || bp.user.avatar || undefined,
+              isVerified: bp.user.emailVerified || false,
+              followers: 0,
+              following: 0,
+              posts: 0,
+              wallet: { balance: 0, currency: 'USD', totalEarned: 0, totalSpent: 0 },
+              createdAt: bp.user.createdAt || new Date().toISOString(),
+              updatedAt: bp.user.updatedAt || new Date().toISOString(),
+            } as User;
+          } else if (bp.userId && currentUserProfile && bp.userId === currentUserProfile.id) {
+            // Post has userId and it matches current user
+            author = currentUserProfile;
+          } else if (bp.userId) {
+            // Post has userId but no user object - create minimal author from userId
+            author = {
+              id: bp.userId,
+              username: 'User',
+              email: '',
+              displayName: 'User',
+              bio: '',
+              avatar: undefined,
+              isVerified: false,
+              followers: 0,
+              following: 0,
+              posts: 0,
+              wallet: { balance: 0, currency: 'USD', totalEarned: 0, totalSpent: 0 },
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            } as User;
+          } else if (currentUserProfile) {
+            // No userId on post, assume current user
+            author = currentUserProfile;
+          } else {
+            // No user data available - skip this post
+            console.warn('⚠️ Skipping post with no author data:', bp._id);
+            return null;
+          }
+          
+          return {
+            id: bp.postId || bp._id || bp.id,
+            author,
+            content: bp.content?.postText || bp.postText || '',
+            type: 'post',
+            media: (bp.content?.mediaURLs || bp.mediaURLs || []).map((url: string, idx: number) => ({
+              id: `${bp.postId || bp._id}-m${idx}`,
+              type: 'image',
+              url: this.fixMediaUrl(url),
+              size: 0,
+            })),
+            likes: bp.likes?.length || 0,
+            comments: bp.comments?.length || 0,
+            shares: 0,
+            isLiked: false,
+            isBookmarked: false,
+            createdAt: bp.createdAt || new Date().toISOString(),
+            updatedAt: bp.updatedAt || new Date().toISOString(),
+            tags: [],
+            location: bp.location?.name,
+            visibility: 'public',
+          } as Post;
+        }).filter((p): p is Post => p !== null);
+        
+        console.log('✅ Transformed posts:', transformedPosts.length);
+        if (transformedPosts.length > 0) {
+          console.log('📋 Sample transformed post:', {
+            id: transformedPosts[0].id,
+            authorId: transformedPosts[0].author.id,
+            authorName: transformedPosts[0].author.displayName,
+          });
+        }
+        const page = (params?.page as number) || 1;
+        const limit = (params?.limit as number) || 20;
+        return {
+          success: true,
+          data: this.paginate<Post>(transformedPosts, page, limit),
+        } as ApiResponse<PaginatedResponse<Post>>;
       }
-    } catch {}
+    } catch (error) {
+      console.error('❌ getPosts error:', error);
+    }
     const page = (params?.page as number) || 1; const limit = (params?.limit as number) || 20;
-    const mine = await this.loadMockUserPosts();
-    const mapped = [...mine, ...mockPosts.map(p => this.mockApiPostFromMock(p))];
+    const mapped = mockPosts.map(p => this.mockApiPostFromMock(p));
     return { success: true, data: this.paginate<Post>(mapped, page, limit) } as ApiResponse<PaginatedResponse<Post>>;
   }
 
@@ -682,9 +887,49 @@ class ApiService {
       if (data.location) {
         payload.location = { name: data.location };
       }
+      console.log('📤 Creating post with payload:', payload);
       const resp = await this.post<any>(API_ENDPOINTS.POSTS.BASE, payload);
-      return resp as any;
-    } catch {
+      console.log('📥 Backend post response:', resp);
+      
+      // Transform backend response to Post format
+      if (resp?.data) {
+      const backendPost = resp.data.post || resp.data;
+        let author: User;
+        try {
+          const currentUser = await this.getUserProfile();
+          author = currentUser?.data!;
+        } catch (error) {
+          console.error('❌ Could not get user profile for new post:', error);
+          throw new Error('Cannot create post without user profile');
+        }
+        const transformedPost: Post = {
+          id: backendPost.postId || backendPost._id || backendPost.id,
+          author,
+          content: backendPost.content?.postText || backendPost.postText || '',
+          type: data.type || 'post',
+          media: (backendPost.content?.mediaURLs || backendPost.mediaURLs || []).map((url: string, idx: number) => ({
+            id: `${backendPost.postId || backendPost._id}-m${idx}`,
+            type: 'image',
+            url: this.fixMediaUrl(url),
+            size: 0,
+          })),
+          likes: backendPost.likes?.length || 0,
+          comments: backendPost.comments?.length || 0,
+          shares: 0,
+          isLiked: false,
+          isBookmarked: false,
+          createdAt: backendPost.createdAt || new Date().toISOString(),
+          updatedAt: backendPost.updatedAt || new Date().toISOString(),
+          tags: data.tags,
+          location: backendPost.location?.name || data.location,
+          visibility: data.visibility || 'public',
+        } as Post;
+        console.log('✅ Transformed post:', transformedPost);
+        return { success: true, data: transformedPost } as ApiResponse<Post>;
+      }
+      throw new Error('Invalid response structure');
+    } catch (error) {
+      console.error('❌ Post creation error:', error);
       // fallback on error
       const id = `post-${Date.now()}`;
       const author = this.mockUser();
@@ -720,7 +965,17 @@ class ApiService {
     if (this.shouldUseMockFallback()) {
       return { success: true } as ApiResponse<void>;
     }
-    try { return await this.post<void>(API_ENDPOINTS.POSTS.SAVE(data.postId), data); } catch { return { success: true } as ApiResponse<void>; }
+    // Don't send postId in body - it's in the URL
+    const { postId, ...body } = data;
+    console.log('🔖 Saving post:', postId, 'body:', body);
+    try { 
+      const result = await this.post<void>(API_ENDPOINTS.POSTS.SAVE(postId), body);
+      console.log('✅ Save post result:', result);
+      return result;
+    } catch (error) { 
+      console.error('❌ Save post error:', error);
+      throw error; // Don't swallow the error
+    }
   }
 
   async unsavePost(postId: string): Promise<ApiResponse<void>> {
@@ -822,12 +1077,6 @@ class ApiService {
 
   // Story Methods
   async getStories(params?: { page?: number; limit?: number }): Promise<ApiResponse<PaginatedResponse<Story>>> {
-    if (this.shouldUseMockFallback()) {
-      const page = params?.page || 1; const limit = params?.limit || 20;
-      const mine = await this.loadMockUserStories();
-      const mapped = [...mine, ...mockStories.map(s => this.mockApiStoryFromMock(s))];
-      return { success: true, data: this.paginate<Story>(mapped, page, limit) } as ApiResponse<PaginatedResponse<Story>>;
-    }
     try {
       const resp = await this.get<any>(API_ENDPOINTS.STORIES.BASE, params);
       console.log('📖 Backend stories response:', resp);
@@ -840,9 +1089,20 @@ class ApiService {
     } catch (err) {
       console.error('❌ Error fetching stories from backend:', err);
     }
-    const page = params?.page || 1; const limit = params?.limit || 20;
-    const mapped = mockStories.map(s => this.mockApiStoryFromMock(s));
-    return { success: true, data: this.paginate<Story>(mapped, page, limit) } as ApiResponse<PaginatedResponse<Story>>;
+    // Return empty instead of mock data
+    const page = params?.page || 1;
+    return {
+      success: true,
+      data: {
+        data: [],
+        pagination: {
+          currentPage: page,
+          totalPages: 0,
+          hasNextPage: false,
+          hasPrevPage: false,
+        },
+      },
+    } as ApiResponse<PaginatedResponse<Story>>;
   }
 
   async getStory(storyId: string): Promise<ApiResponse<Story>> {
@@ -850,52 +1110,14 @@ class ApiService {
   }
 
   async createStory(data: CreateStoryRequest): Promise<ApiResponse<Story>> {
-    if (this.shouldUseMockFallback()) {
-      const s: Story = {
-        id: `story-${Date.now()}`,
-        author: this.mockUser(),
-        media: data.media,
-        content: data.content,
-        views: 0,
-        viewers: [],
-        isViewed: false,
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 24*60*60*1000).toISOString(),
-        isHighlight: false,
-      } as any;
-      const mine = await this.loadMockUserStories();
-      await this.saveMockUserStories([s, ...mine]);
-      return { success: true, data: s } as ApiResponse<Story>;
-    }
-    try {
-      // Map mobile payload to backend format
-      const backendPayload: any = {
-        storyText: data.content || '',
-        mediaURL: data.media?.url || '',
-        mediaType: data.media?.type || 'image',
-      };
-      console.log('Sending story payload to backend:', backendPayload);
-      const resp = await this.post<Story>(API_ENDPOINTS.STORIES.BASE, backendPayload);
-      return resp;
-    } catch (error) {
-      console.error('Backend story creation failed:', error);
-      console.error('Error details:', JSON.stringify(error, null, 2));
-      const s: Story = {
-        id: `story-${Date.now()}`,
-        author: this.mockUser(),
-        media: data.media,
-        content: data.content,
-        views: 0,
-        viewers: [],
-        isViewed: false,
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 24*60*60*1000).toISOString(),
-        isHighlight: false,
-      } as any;
-      const mine = await this.loadMockUserStories();
-      await this.saveMockUserStories([s, ...mine]);
-      return { success: true, data: s } as ApiResponse<Story>;
-    }
+    // Map mobile payload to backend format
+    const backendPayload: any = {
+      storyText: data.content || '',
+      mediaURL: data.media?.url || '',
+      mediaType: data.media?.type || 'image',
+    };
+    console.log('Sending story payload to backend:', backendPayload);
+    return this.post<Story>(API_ENDPOINTS.STORIES.BASE, backendPayload);
   }
 
   async deleteStory(storyId: string): Promise<ApiResponse<void>> {
@@ -924,110 +1146,32 @@ class ApiService {
 
   // Messaging Methods
   async getConversations(): Promise<ApiResponse<Conversation[]>> {
-    if (this.shouldUseMockFallback()) {
-      const saved = await this.loadMockConversations();
-      const convs: Conversation[] = [
-        ...saved,
-        ...mockChats.map((c: any) => ({
-          id: c.id,
-          participants: [this.mockUser(), this.mockUsersList().find(u => u.id === c.user.id) || this.mockUser()],
-          lastMessage: c.lastMessage ? {
-            id: c.lastMessage.id,
-            conversationId: c.id,
-            sender: this.mockUsersList().find(u => u.id === c.lastMessage.senderId) || this.mockUser(),
-            content: c.lastMessage.text,
-            type: 'text',
-            isRead: !!c.lastMessage.isRead,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          } as any : undefined,
-          unreadCount: c.unreadCount || 0,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          isGroup: false,
-        }))
-      ];
-      return { success: true, data: convs } as ApiResponse<Conversation[]>;
-    }
     try {
-      const resp = await this.get<Conversation[]>(API_ENDPOINTS.MESSAGING.CONVERSATIONS);
-      if (resp?.data && Array.isArray(resp.data) && resp.data.length > 0) return resp;
-    } catch {}
-    // Fallback to mock conversations if backend empty or fails
-    const saved = await this.loadMockConversations();
-    const convs: Conversation[] = [
-      ...saved,
-      ...mockChats.map((c: any) => ({
-        id: c.id,
-        participants: [this.mockUser(), this.mockUsersList().find(u => u.id === c.user.id) || this.mockUser()],
-        lastMessage: c.lastMessage ? {
-          id: c.lastMessage.id,
-          conversationId: c.id,
-          sender: this.mockUsersList().find(u => u.id === c.lastMessage.senderId) || this.mockUser(),
-          content: c.lastMessage.text,
-          type: 'text',
-          isRead: !!c.lastMessage.isRead,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        } as any : undefined,
-        unreadCount: c.unreadCount || 0,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        isGroup: false,
-      }))
-    ];
-    return { success: true, data: convs } as ApiResponse<Conversation[]>;
+      const resp = await this.get<any>(API_ENDPOINTS.MESSAGING.CONVERSATIONS);
+      console.log('💬 Backend conversations response:', resp);
+      if (resp?.data) {
+        // Backend returns { data: { conversations: [...] } }
+        const conversations = resp.data.conversations || resp.data;
+        console.log('💬 Extracted conversations:', conversations);
+        return { success: true, data: Array.isArray(conversations) ? conversations : [] } as ApiResponse<Conversation[]>;
+      }
+    } catch (error) {
+      console.error('❌ getConversations error:', error);
+    }
+    return { success: true, data: [] } as ApiResponse<Conversation[]>;
   }
 
   async getConversation(conversationId: string): Promise<ApiResponse<Message[]>> {
-    if (this.shouldUseMockFallback()) {
-      const msgs = (mockChatMessages[conversationId] || []).map((m: any) => ({
-        id: m.id,
-        conversationId,
-        sender: this.mockUsersList().find(u => u.id === m.senderId) || this.mockUser(),
-        content: m.text,
-        type: 'text',
-        isRead: !!m.isRead,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      })) as Message[];
-      return { success: true, data: msgs } as ApiResponse<Message[]>;
-    }
     try {
       const resp = await this.get<Message[]>(API_ENDPOINTS.MESSAGING.CONVERSATION(conversationId));
-      if (resp?.data && Array.isArray(resp.data) && resp.data.length > 0) return resp;
-    } catch {}
-    const msgs = (mockChatMessages[conversationId] || []).map((m: any) => ({
-      id: m.id,
-      conversationId,
-      sender: this.mockUsersList().find(u => u.id === m.senderId) || this.mockUser(),
-      content: m.text,
-      type: 'text',
-      isRead: !!m.isRead,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    })) as Message[];
-    return { success: true, data: msgs } as ApiResponse<Message[]>;
+      if (resp?.data) return resp;
+    } catch (error) {
+      console.error('❌ getConversation error:', error);
+    }
+    return { success: true, data: [] } as ApiResponse<Message[]>;
   }
 
   async createConversation(data: CreateConversationRequest): Promise<ApiResponse<Conversation>> {
-    if (this.shouldUseMockFallback()) {
-      const id = `conv-${(data.participantIds || []).join('-')}-${Date.now()}`;
-      const parts = [this.mockUser(), ...((data.participantIds || []).map((pid: string) => this.findMockUserById(pid)))];
-      const conv: Conversation = {
-        id,
-        participants: parts,
-        lastMessage: undefined,
-        unreadCount: 0,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        isGroup: parts.length > 2,
-        groupName: undefined,
-      } as any;
-      const list = await this.loadMockConversations();
-      await this.saveMockConversations([conv, ...list]);
-      return { success: true, data: conv } as ApiResponse<Conversation>;
-    }
     return this.post<Conversation>(API_ENDPOINTS.MESSAGING.CONVERSATIONS, data);
   }
 
@@ -1036,27 +1180,6 @@ class ApiService {
   async sendMessage(conversationId: string, data: SendMessageRequest): Promise<ApiResponse<Message>>;
   async sendMessage(arg1: any, arg2?: any): Promise<ApiResponse<Message>> {
     const payload = typeof arg1 === 'string' ? arg2 : arg1;
-    if (this.shouldUseMockFallback()) {
-      const convId = payload.conversationId || `conv-${Date.now()}`;
-      const m: Message = {
-        id: `msg-${Date.now()}`,
-        conversationId: convId,
-        sender: this.mockUser(),
-        content: payload.content,
-        type: payload.type || 'text',
-        isRead: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      } as any;
-      const cur = await this.loadMockMessages(convId);
-      await this.saveMockMessages(convId, [...cur, m]);
-      // update conversations store lastMessage
-      const convs = await this.loadMockConversations();
-      const idx = convs.findIndex((c: any) => c.id === convId);
-      if (idx >= 0) { convs[idx] = { ...convs[idx], lastMessage: m, updatedAt: new Date().toISOString() }; }
-      await this.saveMockConversations(convs);
-      return { success: true, data: m } as ApiResponse<Message>;
-    }
     return this.post<Message>(API_ENDPOINTS.MESSAGING.MESSAGES, payload);
   }
 
@@ -1102,7 +1225,20 @@ class ApiService {
     if (this.shouldUseMockFallback()) {
       return { success: true } as ApiResponse<void>;
     }
-    try { return await this.post<void>(API_ENDPOINTS.FOLLOWS.BASE, data); } catch { return { success: true } as ApiResponse<void>; }
+    // Backend expects followeeId, but frontend sends userId
+    const payload = { followeeId: data.userId };
+    console.log('👥 Following user with payload:', payload);
+    try {
+      return await this.post<void>(API_ENDPOINTS.FOLLOWS.BASE, payload);
+    } catch (error: any) {
+      // Treat duplicate follow as success to make action idempotent on the client
+      const msg = String(error?.message || '');
+      if (error?.statusCode === 400 && (msg.includes('Already following') || msg.includes('already following'))) {
+        console.warn('🔁 Already following; treating as success');
+        return { success: true } as ApiResponse<void>;
+      }
+      throw error;
+    }
   }
 
   async unfollowUser(followeeId: string): Promise<ApiResponse<void>> {
@@ -1113,30 +1249,51 @@ class ApiService {
   }
 
   async getFollowers(userId: string): Promise<ApiResponse<User[]>> {
-    if (this.shouldUseMockFallback()) {
-      const list = this.mockUsersList().filter(u => u.id !== userId);
-      return { success: true, data: list.slice(0, 20) } as ApiResponse<User[]>;
-    }
     try {
-      const resp = await this.get<User[]>(API_ENDPOINTS.FOLLOWS.FOLLOWERS(userId));
-      if (resp?.data && Array.isArray(resp.data) && resp.data.length > 0) return resp;
-    } catch {}
-    // Fallback to mock users (exclude current user)
-    const list = this.mockUsersList().filter(u => u.id !== userId);
-    return { success: true, data: list.slice(0, 20) } as ApiResponse<User[]>;
+      const resp = await this.get<any>(API_ENDPOINTS.FOLLOWS.FOLLOWERS(userId));
+      if (resp?.data) {
+        const arr = (resp.data.followers || resp.data.data || []) as any[];
+        const users: User[] = arr.map((u: any) => ({
+          id: u.userId,
+          username: u.fullNames || 'User',
+          displayName: u.fullNames || 'User',
+          avatar: u.profilePictureURL || undefined,
+          isVerified: false,
+          followers: 0,
+          following: 0,
+          posts: 0,
+          bio: '',
+        } as any));
+        return { success: true, data: users } as ApiResponse<User[]>;
+      }
+    } catch (error) {
+      console.error('❌ getFollowers error:', error);
+    }
+    return { success: true, data: [] } as ApiResponse<User[]>;
   }
 
   async getFollowing(userId: string): Promise<ApiResponse<User[]>> {
-    if (this.shouldUseMockFallback()) {
-      const list = this.mockUsersList().filter(u => u.id !== userId);
-      return { success: true, data: list.slice(0, 20) } as ApiResponse<User[]>;
-    }
     try {
-      const resp = await this.get<User[]>(API_ENDPOINTS.FOLLOWS.FOLLOWING(userId));
-      if (resp?.data && Array.isArray(resp.data) && resp.data.length > 0) return resp;
-    } catch {}
-    const list = this.mockUsersList().filter(u => u.id !== userId);
-    return { success: true, data: list.slice(0, 20) } as ApiResponse<User[]>;
+      const resp = await this.get<any>(API_ENDPOINTS.FOLLOWS.FOLLOWING(userId));
+      if (resp?.data) {
+        const arr = (resp.data.following || resp.data.data || []) as any[];
+        const users: User[] = arr.map((u: any) => ({
+          id: u.userId,
+          username: u.fullNames || 'User',
+          displayName: u.fullNames || 'User',
+          avatar: u.profilePictureURL || undefined,
+          isVerified: false,
+          followers: 0,
+          following: 0,
+          posts: 0,
+          bio: '',
+        } as any));
+        return { success: true, data: users } as ApiResponse<User[]>;
+      }
+    } catch (error) {
+      console.error('❌ getFollowing error:', error);
+    }
+    return { success: true, data: [] } as ApiResponse<User[]>;
   }
 
   // User Management extras (stubs to satisfy contexts)
@@ -1176,34 +1333,139 @@ class ApiService {
       return { success: true, data: this.paginate<Post>(mapped, page, limit) } as ApiResponse<PaginatedResponse<Post>>;
     }
     try {
-      const resp = await this.get<PaginatedResponse<Post>>(API_ENDPOINTS.FEED.BASE, params);
-      const ok = resp?.data && Array.isArray((resp.data as any).data);
-      const page = params?.page || 1; const limit = params?.limit || 20;
-      const mine = await this.loadMockUserPosts();
-      if (ok) {
-        const merged = [...mine, ...((resp.data as any).data || [])];
-        return { success: true, data: this.paginate<Post>(merged as any, page, limit) } as any;
+      const resp = await this.get<any>(API_ENDPOINTS.FEED.BASE, params);
+      console.log('📡 Feed backend response:', resp);
+      
+      if (resp?.data) {
+        // Backend returns { data: { feed: [{type, data, timestamp}], pagination } }
+        const feedItems = resp.data.feed || resp.data.data || [];
+        console.log('📝 Feed items:', feedItems.length);
+        
+        // Extract posts from feed items (feed items can be posts or stories)
+        const posts = feedItems
+          .filter((item: any) => item.type === 'post' || !item.type)
+          .map((item: any) => {
+            const post = item.data || item;
+            // Transform backend post to Post type (same as getPosts)
+            return {
+              id: post.postId || post._id || post.id,
+              author: post.author || post.user || {},
+              content: post.content?.postText || post.postText || '',
+              type: 'post',
+              media: (post.content?.mediaURLs || post.mediaURLs || []).map((url: string, idx: number) => ({
+                id: `${post.postId || post._id}-m${idx}`,
+                type: 'image',
+                url: this.fixMediaUrl(url),
+                size: 0,
+              })),
+              likes: post.likes?.length || 0,
+              comments: post.comments?.length || 0,
+              shares: 0,
+              isLiked: false,
+              isBookmarked: false,
+              createdAt: post.createdAt || post.timestamp || new Date().toISOString(),
+              updatedAt: post.updatedAt || new Date().toISOString(),
+              tags: [],
+              location: post.location?.name,
+              visibility: 'public',
+            } as Post;
+          });
+        
+        console.log('✅ Transformed feed posts:', posts.length);
+        
+        const page = params?.page || 1;
+        const limit = params?.limit || 20;
+        return {
+          success: true,
+          data: {
+            data: posts,
+            pagination: resp.data.pagination || {
+              currentPage: page,
+              totalPages: Math.ceil(posts.length / limit),
+              hasNextPage: false,
+              hasPrevPage: page > 1,
+            },
+          },
+        } as ApiResponse<PaginatedResponse<Post>>;
       }
-    } catch {}
+    } catch (error) {
+      console.error('❌ getFeed error:', error);
+    }
+    
+    // Fallback: show user's own posts
+    console.log('⚠️ Using fallback - showing only your posts');
     const page = params?.page || 1; const limit = params?.limit || 20;
-    const mine = await this.loadMockUserPosts();
-    const mapped = [...mine, ...mockPosts.map(p => this.mockApiPostFromMock(p))];
-    return { success: true, data: this.paginate<Post>(mapped, page, limit) } as ApiResponse<PaginatedResponse<Post>>;
+    return this.getPosts({ page, limit });
   }
 
   async getDiscoverFeed(params?: { page?: number; limit?: number }): Promise<ApiResponse<PaginatedResponse<Post>>> {
-    if (this.shouldUseMockFallback()) {
-      const page = params?.page || 1; const limit = params?.limit || 20;
-      const mapped = mockPosts.map(p => this.mockApiPostFromMock(p));
-      return { success: true, data: this.paginate<Post>(mapped, page, limit) } as ApiResponse<PaginatedResponse<Post>>;
-    }
     try {
-      const resp = await this.get<PaginatedResponse<Post>>(API_ENDPOINTS.FEED.DISCOVER, params);
-      if (resp?.data && Array.isArray((resp.data as any).data) && (resp.data as any).data.length > 0) return resp;
-    } catch {}
-    const page = params?.page || 1; const limit = params?.limit || 20;
-    const mapped = mockPosts.map(p => this.mockApiPostFromMock(p));
-    return { success: true, data: this.paginate<Post>(mapped, page, limit) } as ApiResponse<PaginatedResponse<Post>>;
+      const resp = await this.get<any>(API_ENDPOINTS.FEED.DISCOVER, params);
+      console.log('🔍 Discover feed backend response:', resp);
+      
+      if (resp?.data) {
+        const backendPosts = resp.data.posts || resp.data.data || [];
+        console.log('📝 Discover posts count:', backendPosts.length);
+        
+        // Transform backend posts to Post format (same as getPosts)
+        const posts = backendPosts.map((bp: any) => ({
+          id: bp.postId || bp._id || bp.id,
+          author: bp.author || bp.user || {},
+          content: bp.content?.postText || bp.postText || '',
+          type: 'post',
+          media: (bp.content?.mediaURLs || bp.mediaURLs || []).map((url: string, idx: number) => ({
+            id: `${bp.postId || bp._id}-m${idx}`,
+            type: 'image',
+            url: this.fixMediaUrl(url),
+            size: 0,
+          })),
+          likes: bp.likes?.length || 0,
+          comments: bp.comments?.length || 0,
+          shares: 0,
+          isLiked: false,
+          isBookmarked: false,
+          createdAt: bp.createdAt || bp.timestamp || new Date().toISOString(),
+          updatedAt: bp.updatedAt || new Date().toISOString(),
+          tags: [],
+          location: bp.location?.name,
+          visibility: 'public',
+        } as Post));
+        
+        console.log('✅ Transformed discover posts:', posts.length);
+        
+        const page = params?.page || 1;
+        const limit = params?.limit || 20;
+        return {
+          success: true,
+          data: {
+            data: posts,
+            pagination: resp.data.pagination || {
+              currentPage: page,
+              totalPages: Math.ceil(posts.length / limit),
+              hasNextPage: false,
+              hasPrevPage: page > 1,
+            },
+          },
+        } as ApiResponse<PaginatedResponse<Post>>;
+      }
+    } catch (error) {
+      console.error('❌ getDiscoverFeed error:', error);
+    }
+    
+    // Return empty result instead of mock data
+    const page = params?.page || 1;
+    return {
+      success: true,
+      data: {
+        data: [],
+        pagination: {
+          currentPage: page,
+          totalPages: 0,
+          hasNextPage: false,
+          hasPrevPage: false,
+        },
+      },
+    } as ApiResponse<PaginatedResponse<Post>>;
   }
 
   async getTrendingFeed(params?: { page?: number; limit?: number }): Promise<ApiResponse<PaginatedResponse<Post>>> {
@@ -1226,6 +1488,31 @@ class ApiService {
     return this.get<User[]>(API_ENDPOINTS.SEARCH.USERS, params);
   }
 
+  async getAllUsers(params?: { page?: number; limit?: number }): Promise<ApiResponse<any>> {
+    // Use search with a minimal query (space + space = 2 chars) to try to get all users
+    // Or use suggested-users endpoint which doesn't require a query
+    try {
+      // Try suggested users endpoint first - it doesn't require a search query
+      const resp = await this.getSuggestedUsers();
+      if (resp?.success && resp.data) {
+        const users = (resp.data as any).suggestedUsers || resp.data || [];
+        console.log('👥 Got', users.length, 'suggested users');
+        return { success: true, data: { users } } as ApiResponse<any>;
+      }
+      
+      // Fallback: try search with a broad single-char query that's at least 2 chars
+      const searchResp = await this.get<any>(API_ENDPOINTS.SEARCH.USERS, { 
+        q: 'a ', // 2 character minimum for validation
+        page: params?.page || 1, 
+        limit: params?.limit || 50 
+      });
+      return searchResp;
+    } catch (error) {
+      console.error('❌ getAllUsers error:', error);
+      return { success: true, data: { users: [] } } as ApiResponse<any>;
+    }
+  }
+
   async searchPosts(params: SearchRequest): Promise<ApiResponse<Post[]>> {
     return this.get<Post[]>(API_ENDPOINTS.SEARCH.POSTS, params);
   }
@@ -1239,7 +1526,17 @@ class ApiService {
   }
 
   async getSuggestedUsers(): Promise<ApiResponse<User[]>> {
-    return this.get<User[]>(API_ENDPOINTS.SEARCH.SUGGESTED_USERS);
+    try {
+      const resp = await this.get<any>(API_ENDPOINTS.SEARCH.SUGGESTED_USERS);
+      if (resp?.data) {
+        const users = (resp.data as any).suggestedUsers || resp.data || [];
+        return { success: true, data: users } as ApiResponse<User[]>;
+      }
+    } catch (error) {
+      console.error('❌ getSuggestedUsers error:', error);
+    }
+    // Return empty instead of mock data
+    return { success: true, data: [] } as ApiResponse<User[]>;
   }
 
   async searchHashtags(tag: string): Promise<ApiResponse<Post[]>> {
@@ -1479,7 +1776,9 @@ class ApiService {
   }
 
   isAuthenticated(): boolean {
-    return !!this.accessToken;
+    const result = !!this.accessToken;
+    console.log(`🔐 [API] isAuthenticated check: ${result} (token: ${this.accessToken ? 'present' : 'missing'})`);
+    return result;
   }
 
   // Legacy compatibility methods

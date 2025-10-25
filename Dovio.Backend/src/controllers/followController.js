@@ -1,11 +1,19 @@
 import Follow from '../models/Follow.js';
 import User from '../models/User.js';
+import mongoose from 'mongoose';
 import { createNotification } from './notificationController.js';
 
 export const followUser = async (req, res) => {
   try {
-    const { followeeId } = req.body;
+    const { followeeId: followeeIdRaw } = req.body;
     const followerId = req.user.userId;
+
+    // Resolve followee by userId or _id; normalize to user.userId
+    let followeeUser = await User.findOne({ userId: followeeIdRaw });
+    if (!followeeUser && mongoose.Types.ObjectId.isValid(String(followeeIdRaw))) {
+      followeeUser = await User.findById(followeeIdRaw);
+    }
+    const followeeId = followeeUser?.userId || followeeIdRaw;
 
     // Check if trying to follow self
     if (followerId === followeeId) {
@@ -16,7 +24,7 @@ export const followUser = async (req, res) => {
     }
 
     // Check if followee exists
-    const followee = await User.findOne({ userId: followeeId });
+    const followee = followeeUser || await User.findOne({ userId: followeeId });
     if (!followee) {
       return res.status(404).json({
         success: false,
@@ -27,9 +35,11 @@ export const followUser = async (req, res) => {
     // Check if already following
     const existingFollow = await Follow.findOne({ followerId, followeeId });
     if (existingFollow) {
-      return res.status(400).json({
-        success: false,
-        message: 'Already following this user'
+      // Make follow idempotent: return success if relationship already exists
+      return res.status(200).json({
+        success: true,
+        message: 'Already following this user (no-op)',
+        data: { follow: existingFollow }
       });
     }
 
@@ -39,27 +49,48 @@ export const followUser = async (req, res) => {
       followeeId
     });
 
-    await follow.save();
+    try {
+      await follow.save();
+    } catch (e) {
+      // Handle race condition on unique index (duplicate follow)
+      if (e && (e.code === 11000 || String(e.message || '').includes('duplicate key'))) {
+        return res.status(200).json({
+          success: true,
+          message: 'Already following this user (no-op)',
+          data: { follow: existingFollow || { followerId, followeeId } }
+        });
+      }
+      throw e;
+    }
 
     // Add recent action
     const follower = await User.findOne({ userId: followerId });
     if (follower) {
-      follower.recentActions.unshift(`Followed ${followee.fullNames} at ${new Date().toISOString()}`);
-      if (follower.recentActions.length > 50) {
-        follower.recentActions = follower.recentActions.slice(0, 50);
+      if (!Array.isArray(follower.recentActions)) follower.recentActions = [];
+      try {
+        follower.recentActions.unshift(`Followed ${followee.fullNames} at ${new Date().toISOString()}`);
+        if (follower.recentActions.length > 50) {
+          follower.recentActions = follower.recentActions.slice(0, 50);
+        }
+      } catch {}
+      try { await follower.save(); } catch (e) {
+        console.warn('Failed to save follower recentActions after follow:', e?.message || e);
       }
-      await follower.save();
-    }
 
-    // Create notification for the followed user
-    await createNotification(
-      followeeId,
-      'follow',
-      followerId,
-      null,
-      'New Follower',
-      `${follower.fullNames} started following you`
-    );
+      // Create notification for the followed user (best-effort)
+      try {
+        await createNotification(
+          followeeId,
+          'follow',
+          followerId,
+          null,
+          'New Follower',
+          `${follower.fullNames} started following you`
+        );
+      } catch (e) {
+        console.warn('Failed to create follow notification:', e?.message || e);
+      }
+    }
 
     res.status(201).json({
       success: true,
@@ -78,28 +109,41 @@ export const followUser = async (req, res) => {
 
 export const unfollowUser = async (req, res) => {
   try {
-    const { followeeId } = req.params;
+    const { followeeId: followeeIdParam } = req.params;
     const followerId = req.user.userId;
 
-    const follow = await Follow.findOne({ followerId, followeeId });
+    // Normalize param to user.userId if _id was provided
+    let normFolloweeId = followeeIdParam;
+    if (mongoose.Types.ObjectId.isValid(String(followeeIdParam))) {
+      const u = await User.findById(followeeIdParam).select('userId');
+      if (u?.userId) normFolloweeId = u.userId;
+    }
+
+    const follow = await Follow.findOne({ followerId, followeeId: normFolloweeId });
     if (!follow) {
-      return res.status(404).json({
-        success: false,
-        message: 'Not following this user'
+      // Make unfollow idempotent: return 200 when there is nothing to delete
+      return res.json({
+        success: true,
+        message: 'Not following this user (no-op)'
       });
     }
 
-    await Follow.findOneAndDelete({ followerId, followeeId });
+    await Follow.findOneAndDelete({ followerId, followeeId: normFolloweeId });
 
     // Add recent action
     const follower = await User.findOne({ userId: followerId });
-    const followee = await User.findOne({ userId: followeeId });
+    const followee = await User.findOne({ userId: normFolloweeId });
     if (follower) {
-      follower.recentActions.unshift(`Unfollowed ${followee?.fullNames || 'user'} at ${new Date().toISOString()}`);
-      if (follower.recentActions.length > 50) {
-        follower.recentActions = follower.recentActions.slice(0, 50);
+      if (!Array.isArray(follower.recentActions)) follower.recentActions = [];
+      try {
+        follower.recentActions.unshift(`Unfollowed ${followee?.fullNames || 'user'} at ${new Date().toISOString()}`);
+        if (follower.recentActions.length > 50) {
+          follower.recentActions = follower.recentActions.slice(0, 50);
+        }
+      } catch {}
+      try { await follower.save(); } catch (e) {
+        console.warn('Failed to save follower recentActions after unfollow:', e?.message || e);
       }
-      await follower.save();
     }
 
     res.json({

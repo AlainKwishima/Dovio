@@ -29,13 +29,15 @@ export default function ProfileScreen() {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [user, setUser] = useState<any>(currentUser);
   const [photos, setPhotos] = useState<string[]>([]);
+  const [posts, setPosts] = useState<any[]>([]);
 
   // Load posts function
   const loadPosts = React.useCallback(async () => {
     try {
       const profile = await api.getUserProfile();
       if (profile?.success && profile.data) {
-        setUser((prev: any) => ({ ...(prev || {}), ...(profile.data as any) }));
+        const userData = (profile.data as any).user || (profile.data as any);
+        setUser(userData);
       }
       const feed = await api.getPosts({ page: 1, limit: 100 } as any);
       if (feed?.success && feed.data) {
@@ -45,18 +47,20 @@ export default function ProfileScreen() {
         const userId = actualUser?.userId || actualUser?.id;
         
         console.log('🔍 Filtering posts for userId:', userId);
+        console.log('🔍 Current user object:', actualUser);
         console.log('🔍 Sample post structure:', allPosts[0]);
         console.log('🔍 Sample post author:', allPosts[0]?.author);
         
         const userPosts = allPosts.filter((p: any) => {
-          // Try multiple possible userId locations
-          const postUserId = p.userId || p.author?.userId || p.author?.id || p.user?.userId || p.user?.id;
-          console.log('🔍 Checking post:', p.id, 'postUserId:', postUserId, 'matches:', postUserId === userId);
-          const matches = postUserId === userId;
-          if (matches) console.log('✅ Found user post:', p._id || p.id);
+          // The transformed Post has author.id field
+          const postAuthorId = p.author?.id;
+          const matches = postAuthorId === userId;
+          console.log('🔍 Checking post:', p.id, 'postAuthorId:', postAuthorId, 'userId:', userId, 'matches:', matches);
+          if (matches) console.log('✅ Found user post:', p.id);
           return matches;
         });
         console.log('📸 Total posts:', allPosts.length, 'User posts:', userPosts.length);
+        setPosts(userPosts); // Store full posts for navigation
         const urls = userPosts.flatMap((p: any) => (Array.isArray(p.media) ? p.media : [])
           .map((m: any) => m?.url)
           .filter(Boolean));
@@ -100,8 +104,8 @@ export default function ProfileScreen() {
 
   const resolvedAvatar = user?.avatar || currentUser?.avatar || 'https://i.pravatar.cc/150?img=11';
   const resolvedBio = user?.bio || currentUser?.bio || '';
-  const resolvedFollowers = (user?.followers ?? currentUser?.followers ?? 0) as number;
-  const resolvedFollowing = (user?.following ?? currentUser?.following ?? 0) as number;
+  const resolvedFollowers = Number(user?.followers ?? currentUser?.followers ?? 0);
+  const resolvedFollowing = Number(user?.following ?? currentUser?.following ?? 0);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -155,7 +159,7 @@ export default function ProfileScreen() {
                 activeOpacity={0.7}
                 onPress={() => router.push({
                   pathname: '/followers',
-                  params: { userId: user.id, username: resolvedUsername }
+                  params: { userId: (user as any)?.id || (user as any)?.userId, username: resolvedUsername }
                 })}
               >
                 <Text style={[styles.statValue, { color: colors.text }]}> 
@@ -169,7 +173,7 @@ export default function ProfileScreen() {
                 activeOpacity={0.7}
                 onPress={() => router.push({
                   pathname: '/following',
-                  params: { userId: user.id, username: resolvedUsername }
+                  params: { userId: (user as any)?.id || (user as any)?.userId, username: resolvedUsername }
                 })}
               >
                 <Text style={[styles.statValue, { color: colors.text }]}>{resolvedFollowing}</Text>
@@ -221,16 +225,23 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.photosGrid}>
-          {photos.map((photo, index) => (
-            <TouchableOpacity
-              key={index}
-              style={styles.photoItem}
-              activeOpacity={0.8}
-              onPress={() => router.push('/post-detail')}
-            >
-              <Image source={{ uri: photo }} style={styles.photoImage} />
-            </TouchableOpacity>
-          ))}
+          {posts.map((post, index) => {
+            const photoUrl = post.media?.[0]?.url;
+            if (!photoUrl) return null;
+            return (
+              <TouchableOpacity
+                key={post.id || index}
+                style={styles.photoItem}
+                activeOpacity={0.8}
+                onPress={() => router.push({
+                  pathname: '/post-detail',
+                  params: { postId: post.id }
+                })}
+              >
+                <Image source={{ uri: photoUrl }} style={styles.photoImage} />
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
         <View style={styles.bottomSpacer} />
